@@ -1,3 +1,23 @@
+# Ultimate Retro Shader Collection for tech3bsp
+
+Provides additional shaders for tech3bsp functionality.
+**NOTES**
+* This is primarily made for use with maps compiled with -sRGB at the lighting stage, feel free to modify `common.gdshaderinc` as needed for your own project.
+* Vertex lighting is the main goal here, though lightmap images are supported. These will do tripoint texture filtering regardless of texture filter settings.
+
+
+Use `tech3_model.gdshader` and `tech3_sprite.gdshader` for dynamic entities which need the lightgrid.
+
+Use `tech3_lightmap_opaque_repeating.gdshader` for solid lightmapped surfaces, or `tech3_vertex_opaque_repeating.gdshader` for vertex lit maps (very appropriate for URSC).
+* For best results, update the `material_from_texture` function to load the new surface shaders on BSP import.
+
+TODO:
+* Liquids
+* Directionally shaded sprites?
+
+Original README below:
+
+---
 # Ultimate Retro Shader Collection
 
 [![Godot](https://img.shields.io/badge/Godot_4.2_--_4.7-blue?style=flat&logo=godotengine&logoColor=white)](https://godotengine.org/) [![Itch](https://img.shields.io/badge/itch.io-red?style=flat&logo=itchdotio&logoColor=white)](https://zorochase.itch.io/ultimate-retro-shader-collection-for-godot)

@@ -25,7 +25,9 @@ render_mode
 	unshaded,
 #else
 	diffuse_lambert_wrap,
+#if !defined(TECH3_LIGHTMAP_SURFACE)
 	vertex_lighting,
+#endif
 #endif
 
 #if defined(AMBIENT_LIGHT_DISABLED)
@@ -72,10 +74,22 @@ global uniform float cull_distance;
 
 
 // Uniforms
+#if defined(TECH3_LIGHTMAP_SURFACE)
+	uniform sampler2D lightmap_texture : filter_nearest, repeat_disable;
+#endif
+
 #if defined(ALPHA_BLEND) || (defined(ALPHA_SCISSOR) && !defined(SHINY) && !defined(TEXTURE_METAL))
 	uniform vec4 albedo_color : source_color = vec4(1.0);
 #else
 	uniform vec3 albedo_color : source_color = vec3(1.0);
+#endif
+
+#if defined(TECH3_SPRITE) || defined(TECH3_MODEL)
+	global uniform sampler3D light_grid_ambient : filter_linear;
+	global uniform sampler3D light_grid_direct : filter_linear;
+	global uniform sampler3D light_grid_cartesian : filter_linear;
+	global uniform vec3 light_grid_offset;
+	global uniform vec3 light_grid_normalize; 
 #endif
 
 #if defined(SHINY)
@@ -119,6 +133,11 @@ uniform bool convert_vertex_colors = false;
 
 
 // Varyings
+#if defined(TECH3_SPRITE) || defined(TECH3_MODEL)
+	varying vec3 world_position;
+	varying vec3 world_normal;
+#endif
+
 #if !defined(TEXTURE_DISABLED) && !defined(TEXTURE_METAL) && !defined(SHINY)
 	varying float position_w;
 #endif
@@ -132,6 +151,15 @@ uniform bool convert_vertex_colors = false;
 #endif
 
 // Functions
+#if defined(TECH3_SPRITE) || defined(TECH3_MODEL)
+	vec3 get_3D_texture_coordinates(vec3 position) {
+		position -= light_grid_offset;
+		vec3 pos = vec3(position.x / -light_grid_normalize.x, position.z / light_grid_normalize.y, position.y / light_grid_normalize.z);
+		return pos;
+	}
+#endif
+
+
 #if defined(SHINY)
 	vec3 glimmer(vec3 input)
 	{
@@ -183,8 +211,52 @@ uniform bool convert_vertex_colors = false;
 			(1.0 - interp_y) * (sample_a - sample_c)) *
 			step(1.0, interp_x + interp_y));
 
-	    return diffuse_color;
+		return diffuse_color;
 	}
+
+	#if defined(TECH3_LIGHTMAP_SURFACE)
+		vec4 lightmapTextureFiltered(vec2 uv2)
+	{
+		vec2 lightmap_texture_size = vec2(textureSize(lightmap_texture, 0));
+
+		vec2 tex_pix_a = vec2(1.0 / lightmap_texture_size.x, 0.0);
+		vec2 tex_pix_b = vec2(0.0, 1.0 / lightmap_texture_size.y);
+		vec2 tex_pix_c = vec2(tex_pix_a.x,tex_pix_b.y);
+		vec2 half_tex = vec2(tex_pix_a.x * 0.5, tex_pix_b.y * 0.5);
+		vec2 uv_centered = uv2 - half_tex;
+
+		vec4 lightmap_color = texture(lightmap_texture, uv_centered);
+		vec4 sample_a = texture(lightmap_texture, uv_centered + tex_pix_a);
+		vec4 sample_b = texture(lightmap_texture, uv_centered + tex_pix_b);
+		vec4 sample_c = texture(lightmap_texture, uv_centered + tex_pix_c);
+
+		float interp_x = modf(uv_centered.x * lightmap_texture_size.x, lightmap_texture_size.x);
+		float interp_y = modf(uv_centered.y * lightmap_texture_size.y, lightmap_texture_size.y);
+
+		if (uv_centered.x < 0.0)
+		{
+			interp_x = 1.0 - interp_x * -1.0;
+		}
+		if (uv_centered.y < 0.0)
+		{
+			interp_y = 1.0 - interp_y * -1.0;
+		}
+
+		lightmap_color = (
+			lightmap_color +
+			interp_x * (sample_a - lightmap_color) +
+			interp_y * (sample_b - lightmap_color)) *
+			(1.0 - step(1.0, interp_x + interp_y));
+
+		lightmap_color += (
+			(sample_c + (1.0 - interp_x) * (sample_b - sample_c) +
+			(1.0 - interp_y) * (sample_a - sample_c)) *
+			step(1.0, interp_x + interp_y));
+
+		return lightmap_color;
+	}
+	#endif
+
 #endif
 
 // https://gamedev.stackexchange.com/a/194038
@@ -212,6 +284,17 @@ void vertex()
 	if (convert_vertex_colors)
 		COLOR.rgb = fromLinear(COLOR.rgb);
 
+	//#if defined(TECH3_VERTEX_SURFACE)
+		//COLOR.rgb = toLinear(COLOR.rgb);// * 2.0;
+		////COLOR.rgb *= 2.0;
+	//#endif
+	
+	#if defined(TECH3_MODEL) || defined(TECH3_SPRITE)
+		//world_position = get_3D_texture_coordinates((MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz);
+		world_position = get_3D_texture_coordinates(NODE_POSITION_WORLD);
+		world_normal = normalize(mat3(MODEL_MATRIX) * NORMAL);
+	#endif
+	
 	#if !defined(TEXTURE_DISABLED) && !defined(TEXTURE_METAL) && !defined(SHINY)
 		UV = UV * uv_scale + uv_offset + (uv_scroll_speed * TIME);
 	#endif
@@ -409,6 +492,10 @@ void fragment()
 
 				ALBEDO *= albedo_color.rgb;
 
+				#if defined(TECH3_VERTEX_SURFACE)
+				EMISSION = ALBEDO * COLOR.rgb;
+				#endif
+
 				#if defined(ALPHA_BLEND)
 					ALPHA = albedo_color.a * sampled_color.a * COLOR.a;
 				#endif
@@ -420,4 +507,34 @@ void fragment()
 		FOG.a = fog_mix_factor;
 		FOG.rgb = toLinear(fog_color.rgb);
 	#endif
+
+	#if defined(TECH3_SPRITE) || defined(TECH3_MODEL)
+		vec3 amb = texture(light_grid_ambient, world_position).rgb;
+		vec3 dir = texture(light_grid_direct, world_position).rgb;
+		vec3 directional;
+	#if defined(TECH3_MODEL)
+		vec3 cart = texture(light_grid_cartesian, world_position).xyz;
+		vec3 light_dir = cart * 2.0 - 1.0;
+		vec3 normal = normalize(world_normal);
+		float NdotL = max(dot(normal, light_dir), 0.0);
+		directional = dir.rgb * NdotL;
+	#else
+		directional = dir.rgb;
+	#endif
+		vec3 final = toLinear(amb.rgb + directional);
+		EMISSION = ALBEDO * final;
+	#endif
 }
+
+// For lightmapped BSP surfaces
+#if defined(TECH3_LIGHTMAP_SURFACE)
+void light() {
+	if (LIGHT_IS_DIRECTIONAL) {
+		vec3 lightmap = lightmapTextureFiltered(UV2).rgb;
+		lightmap = toLinear(lightmap);// * 2.0;
+		DIFFUSE_LIGHT = lightmap * ATTENUATION;
+	} else {
+		DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR / PI;
+	}
+}
+#endif
